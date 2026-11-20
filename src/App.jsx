@@ -19,6 +19,7 @@ import {
   CheckSquare,
   Square,
   AlertCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   supabase,
@@ -47,6 +48,10 @@ export default function App() {
   const [selectedSupervisorFilter, setSelectedSupervisorFilter] = useState('all');
   const [previewFile, setPreviewFile] = useState(null);
 
+  // Custom Center Pop-up Modal (Confirm & Alert)
+  const [dialog, setDialog] = useState(null);
+  // dialog shape: { type: 'confirm' | 'alert', title, message, confirmText, variant: 'danger' | 'primary', onConfirm }
+
   // Modal & Editing States (Full CRUD)
   const [showTargetModal, setShowTargetModal] = useState(false);
   const [editingTarget, setEditingTarget] = useState(null);
@@ -70,6 +75,27 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
 
   const { permission, requestPermission } = useNotifications(targets, supervisions);
+
+  const showAlert = (title, message, variant = 'primary') => {
+    setDialog({
+      type: 'alert',
+      title,
+      message,
+      confirmText: 'Mengerti',
+      variant,
+    });
+  };
+
+  const showConfirm = ({ title, message, confirmText = 'Hapus', variant = 'danger', onConfirm }) => {
+    setDialog({
+      type: 'confirm',
+      title,
+      message,
+      confirmText,
+      variant,
+      onConfirm,
+    });
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -217,17 +243,24 @@ export default function App() {
       setEditingTarget(null);
       fetchAllData();
     } catch (err) {
-      alert('Gagal menyimpan target: ' + err.message);
+      showAlert('Gagal Menyimpan Target', err.message, 'danger');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeleteTarget = async (id) => {
-    if (!confirm('Hapus target ini?')) return;
-    const { error } = await supabase.from('targets').delete().eq('id', id);
-    if (error) alert('Gagal menghapus target: ' + error.message);
-    else fetchAllData();
+  const handleDeleteTarget = (target) => {
+    showConfirm({
+      title: 'Hapus Target Jadwal?',
+      message: `Target "${target.title}" akan dihapus permanen dari daftar countdown.`,
+      confirmText: 'Ya, Hapus',
+      variant: 'danger',
+      onConfirm: async () => {
+        const { error } = await supabase.from('targets').delete().eq('id', target.id);
+        if (error) showAlert('Gagal Menghapus', error.message, 'danger');
+        else fetchAllData();
+      },
+    });
   };
 
   // ==================== CRUD: INTERNSHIP LOGS ====================
@@ -301,27 +334,34 @@ export default function App() {
       setEditingLog(null);
       fetchAllData();
     } catch (err) {
-      alert('Gagal menyimpan log: ' + err.message);
+      showAlert('Gagal Menyimpan Logbook', err.message, 'danger');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeleteInternshipLog = async (log) => {
-    if (!confirm(`Hapus logbook Week ${log.week_number}?`)) return;
-    try {
-      const paths = log.evidences?.map((ev) => ev.path).filter(Boolean) || [];
-      if (paths.length > 0) {
-        await supabase.storage.from('evidences').remove(paths);
-      }
+  const handleDeleteInternshipLog = (log) => {
+    showConfirm({
+      title: `Hapus Logbook Week ${log.week_number}?`,
+      message: 'Catatan aktivitas mingguan beserta file bukti yang terlampir akan dihapus permanen.',
+      confirmText: 'Ya, Hapus',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const paths = log.evidences?.map((ev) => ev.path).filter(Boolean) || [];
+          if (paths.length > 0) {
+            await supabase.storage.from('evidences').remove(paths);
+          }
 
-      const { error } = await supabase.from('internship_logs').delete().eq('id', log.id);
-      if (error) throw error;
+          const { error } = await supabase.from('internship_logs').delete().eq('id', log.id);
+          if (error) throw error;
 
-      fetchAllData();
-    } catch (err) {
-      alert('Gagal menghapus logbook: ' + err.message);
-    }
+          fetchAllData();
+        } catch (err) {
+          showAlert('Gagal Menghapus Logbook', err.message, 'danger');
+        }
+      },
+    });
   };
 
   const toggleLogStatus = async (log) => {
@@ -367,17 +407,24 @@ export default function App() {
       setEditingMilestone(null);
       fetchAllData();
     } catch (err) {
-      alert('Gagal menyimpan tahapan skripsi: ' + err.message);
+      showAlert('Gagal Menyimpan Tahapan', err.message, 'danger');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeleteMilestone = async (id) => {
-    if (!confirm('Hapus tahapan skripsi ini?')) return;
-    const { error } = await supabase.from('thesis_milestones').delete().eq('id', id);
-    if (error) alert('Gagal menghapus tahapan: ' + error.message);
-    else fetchAllData();
+  const handleDeleteMilestone = (milestone) => {
+    showConfirm({
+      title: 'Hapus Tahapan Skripsi?',
+      message: `Tahapan "${milestone.title}" (${milestone.weight_percentage}%) akan dihapus dari checklist.`,
+      confirmText: 'Ya, Hapus',
+      variant: 'danger',
+      onConfirm: async () => {
+        const { error } = await supabase.from('thesis_milestones').delete().eq('id', milestone.id);
+        if (error) showAlert('Gagal Menghapus', error.message, 'danger');
+        else fetchAllData();
+      },
+    });
   };
 
   // ==================== CRUD: SUPERVISORS ====================
@@ -407,17 +454,24 @@ export default function App() {
       e.target.reset();
       fetchAllData();
     } catch (err) {
-      alert('Gagal menyimpan data dosen: ' + err.message);
+      showAlert('Gagal Menyimpan Data Dosen', err.message, 'danger');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeleteSupervisor = async (id) => {
-    if (!confirm('Hapus dosen pembimbing ini?')) return;
-    const { error } = await supabase.from('supervisors').delete().eq('id', id);
-    if (error) alert('Gagal menghapus dosen: ' + error.message);
-    else fetchAllData();
+  const handleDeleteSupervisor = (sup) => {
+    showConfirm({
+      title: 'Hapus Dosen Pembimbing?',
+      message: `Data "${sup.name}" (${sup.role}) akan dihapus dari daftar pembimbing.`,
+      confirmText: 'Ya, Hapus',
+      variant: 'danger',
+      onConfirm: async () => {
+        const { error } = await supabase.from('supervisors').delete().eq('id', sup.id);
+        if (error) showAlert('Gagal Menghapus', error.message, 'danger');
+        else fetchAllData();
+      },
+    });
   };
 
   // ==================== CRUD: THESIS SUPERVISIONS ====================
@@ -480,26 +534,33 @@ export default function App() {
       setEditingSupervision(null);
       fetchAllData();
     } catch (err) {
-      alert('Gagal menyimpan bimbingan: ' + err.message);
+      showAlert('Gagal Menyimpan Bimbingan', err.message, 'danger');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDeleteSupervision = async (item) => {
-    if (!confirm('Hapus riwayat bimbingan ini?')) return;
-    try {
-      if (item.proof_image_url) {
-        await supabase.storage.from('evidences').remove([item.proof_image_url]);
-      }
+  const handleDeleteSupervision = (item) => {
+    showConfirm({
+      title: 'Hapus Riwayat Bimbingan?',
+      message: 'Catatan bimbingan ini beserta foto lembar kontrol yang terlampir akan dihapus permanen.',
+      confirmText: 'Ya, Hapus',
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          if (item.proof_image_url) {
+            await supabase.storage.from('evidences').remove([item.proof_image_url]);
+          }
 
-      const { error } = await supabase.from('thesis_supervisions').delete().eq('id', item.id);
-      if (error) throw error;
+          const { error } = await supabase.from('thesis_supervisions').delete().eq('id', item.id);
+          if (error) throw error;
 
-      fetchAllData();
-    } catch (err) {
-      alert('Gagal menghapus bimbingan: ' + err.message);
-    }
+          fetchAllData();
+        } catch (err) {
+          showAlert('Gagal Menghapus Bimbingan', err.message, 'danger');
+        }
+      },
+    });
   };
 
   const toggleSupervisionStatus = async (item) => {
@@ -735,7 +796,7 @@ export default function App() {
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => handleDeleteTarget(target.id)}
+                          onClick={() => handleDeleteTarget(target)}
                           title="Hapus Target"
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
                         >
@@ -1066,7 +1127,7 @@ export default function App() {
                           <Edit3 className="w-3 h-3" />
                         </button>
                         <button
-                          onClick={() => handleDeleteMilestone(m.id)}
+                          onClick={() => handleDeleteMilestone(m)}
                           title="Hapus Tahapan"
                           className="p-1 text-slate-400 hover:text-rose-600 rounded"
                         >
@@ -1233,6 +1294,65 @@ export default function App() {
           <span>Skripsi</span>
         </button>
       </nav>
+
+      {/* CUSTOM CENTER POP-UP DIALOG (CONFIRM & ALERT) */}
+      {dialog && (
+        <div
+          onClick={() => setDialog(null)}
+          className="fixed inset-0 z-[60] bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white border border-slate-200 rounded-2xl max-w-sm w-full p-6 shadow-xl text-center space-y-4 animate-in fade-in zoom-in-95 duration-150"
+          >
+            <div
+              className={`w-12 h-12 rounded-2xl mx-auto flex items-center justify-center ${
+                dialog.variant === 'danger'
+                  ? 'bg-rose-50 text-rose-600 border border-rose-100'
+                  : 'bg-indigo-50 text-indigo-600 border border-indigo-100'
+              }`}
+            >
+              {dialog.variant === 'danger' ? (
+                <AlertTriangle className="w-6 h-6" />
+              ) : (
+                <AlertCircle className="w-6 h-6" />
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-slate-900">{dialog.title}</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">{dialog.message}</p>
+            </div>
+
+            <div className="flex items-center gap-2.5 pt-2">
+              {dialog.type === 'confirm' && (
+                <button
+                  type="button"
+                  onClick={() => setDialog(null)}
+                  className="flex-1 py-2.5 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition"
+                >
+                  Batal
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  const action = dialog.onConfirm;
+                  setDialog(null);
+                  if (action) await action();
+                }}
+                className={`flex-1 py-2.5 px-4 rounded-xl text-white text-xs font-semibold transition shadow-sm ${
+                  dialog.variant === 'danger'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-[#6366F1] hover:bg-indigo-600'
+                }`}
+              >
+                {dialog.confirmText || 'OK'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: TARGET */}
       {showTargetModal && (
@@ -1582,7 +1702,7 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleDeleteSupervisor(sup.id)}
+                          onClick={() => handleDeleteSupervisor(sup)}
                           className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
