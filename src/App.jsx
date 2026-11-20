@@ -20,12 +20,14 @@ import {
   Square,
   AlertCircle,
   AlertTriangle,
+  Download,
 } from 'lucide-react';
 import {
   supabase,
   uploadEvidenceFile,
   getSignedEvidenceUrl,
 } from './lib/supabase';
+import { exportInternshipPdf, exportThesisPdf } from './lib/exportPdf';
 import { useNotifications } from './hooks/useNotifications';
 
 export default function App() {
@@ -36,6 +38,11 @@ export default function App() {
   const [authError, setAuthError] = useState('');
 
   const [totalWeeks, setTotalWeeks] = useState(16);
+  const [internshipMeta, setInternshipMeta] = useState({
+    company: '',
+    role: '',
+    mentor: '',
+  });
   const [targets, setTargets] = useState([]);
   const [internshipLogs, setInternshipLogs] = useState([]);
   const [milestones, setMilestones] = useState([]);
@@ -50,7 +57,6 @@ export default function App() {
 
   // Custom Center Pop-up Modal (Confirm & Alert)
   const [dialog, setDialog] = useState(null);
-  // dialog shape: { type: 'confirm' | 'alert', title, message, confirmText, variant: 'danger' | 'primary', onConfirm }
 
   // Modal & Editing States (Full CRUD)
   const [showTargetModal, setShowTargetModal] = useState(false);
@@ -135,7 +141,15 @@ export default function App() {
           .order('supervision_date', { ascending: false }),
       ]);
 
-      if (settingsRes.data) setTotalWeeks(settingsRes.data.total_internship_weeks);
+      if (settingsRes.data) {
+        setTotalWeeks(settingsRes.data.total_internship_weeks || 16);
+      }
+      setInternshipMeta({
+        company: localStorage.getItem('gs_intern_company') || '',
+        role: localStorage.getItem('gs_intern_role') || '',
+        mentor: localStorage.getItem('gs_intern_mentor') || '',
+      });
+
       if (targetsRes.data) setTargets(targetsRes.data);
       if (logsRes.data) setInternshipLogs(logsRes.data);
       if (milestonesRes.data) setMilestones(milestonesRes.data);
@@ -572,14 +586,24 @@ export default function App() {
     fetchAllData();
   };
 
-  const handleUpdateTotalWeeks = async (e) => {
+  const handleUpdateInternshipSettings = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
     const weeks = Number(formData.get('total_weeks'));
+    const company = formData.get('company')?.trim() || '';
+    const role = formData.get('role')?.trim() || '';
+    const mentor = formData.get('mentor')?.trim() || '';
+
+    localStorage.setItem('gs_intern_company', company);
+    localStorage.setItem('gs_intern_role', role);
+    localStorage.setItem('gs_intern_mentor', mentor);
+
     await supabase
       .from('user_settings')
       .upsert({ user_id: session.user.id, total_internship_weeks: weeks });
+
     setTotalWeeks(weeks);
+    setInternshipMeta({ company, role, mentor });
     setShowWeeksModal(false);
   };
 
@@ -849,6 +873,12 @@ export default function App() {
                   <p className="text-xs text-slate-500">
                     {internshipProgress.completedCount} dari {totalWeeks} Minggu Selesai
                   </p>
+                  {internshipMeta.company && (
+                    <p className="text-[11px] font-medium text-indigo-600 mt-0.5 truncate max-w-[220px]">
+                      {internshipMeta.company}
+                      {internshipMeta.role ? ` • ${internshipMeta.role}` : ''}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -857,7 +887,7 @@ export default function App() {
                 </span>
                 <button
                   onClick={() => setShowWeeksModal(true)}
-                  title="Atur Total Minggu"
+                  title="Pengaturan Progres Magang"
                   className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"
                 >
                   <Settings className="w-4 h-4" />
@@ -924,15 +954,49 @@ export default function App() {
             </div>
 
             {activeTab === 'internship' ? (
-              <button
-                onClick={openCreateLogModal}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-[#6366F1] hover:bg-indigo-600 text-white text-xs font-medium rounded-xl transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Catat Minggu Baru</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() =>
+                    exportInternshipPdf({
+                      logs: internshipLogs,
+                      totalWeeks,
+                      completedCount: internshipProgress.completedCount,
+                      pct: internshipProgress.pct,
+                      meta: internshipMeta,
+                    })
+                  }
+                  className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-xl transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Ekspor PDF</span>
+                </button>
+                <button
+                  onClick={openCreateLogModal}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-[#6366F1] hover:bg-indigo-600 text-white text-xs font-medium rounded-xl transition"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Catat Minggu Baru</span>
+                </button>
+              </div>
             ) : (
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const activeSup = supervisors.find((s) => s.id === selectedSupervisorFilter);
+                    exportThesisPdf({
+                      supervisions: filteredSupervisions,
+                      milestones,
+                      thesisProgress,
+                      filterLabel: activeSup
+                        ? `${activeSup.role} — ${activeSup.name}`
+                        : 'Semua Dosen Pembimbing',
+                    });
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-xl transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Ekspor PDF</span>
+                </button>
                 <button
                   onClick={() => {
                     setEditingSupervisor(null);
@@ -1848,32 +1912,75 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL: TOTAL WEEKS */}
+      {/* MODAL: PENGATURAN PROGRES MAGANG */}
       {showWeeksModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xs w-full p-6 shadow-xl">
-            <h3 className="font-bold text-slate-900 mb-3">Target Total Minggu Magang</h3>
-            <form onSubmit={handleUpdateTotalWeeks} className="space-y-4">
-              <input
-                type="number"
-                name="total_weeks"
-                min="1"
-                max="52"
-                required
-                defaultValue={totalWeeks}
-                className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
-              />
-              <div className="flex gap-2">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-900">Pengaturan Progres Magang</h3>
+              <button onClick={() => setShowWeeksModal(false)}>
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateInternshipSettings} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Target Total Minggu Magang
+                </label>
+                <input
+                  type="number"
+                  name="total_weeks"
+                  min="1"
+                  max="52"
+                  required
+                  defaultValue={totalWeeks}
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Nama Perusahaan / Instansi (Opsional)
+                </label>
+                <input
+                  name="company"
+                  defaultValue={internshipMeta.company}
+                  placeholder="Contoh: PT Kodegiri Indonesia"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Posisi / Divisi (Opsional)
+                </label>
+                <input
+                  name="role"
+                  defaultValue={internshipMeta.role}
+                  placeholder="Contoh: Manual QA Intern"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Nama Pembimbing Lapangan (Opsional)
+                </label>
+                <input
+                  name="mentor"
+                  defaultValue={internshipMeta.mentor}
+                  placeholder="Untuk kolom tanda tangan PDF"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => setShowWeeksModal(false)}
-                  className="flex-1 py-2 text-xs font-medium text-slate-600 bg-slate-100 rounded-xl"
+                  className="flex-1 py-2.5 text-xs font-medium text-slate-600 bg-slate-100 rounded-xl"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 text-xs font-medium text-white bg-[#6366F1] rounded-xl"
+                  className="flex-1 py-2.5 text-xs font-medium text-white bg-[#6366F1] rounded-xl"
                 >
                   Simpan
                 </button>
