@@ -239,6 +239,23 @@ export default function App() {
     }
   };
 
+  const handleDeleteInternshipLog = async (log) => {
+    if (!confirm(`Hapus logbook Week ${log.week_number}?`)) return;
+    try {
+      const paths = log.evidences?.map((ev) => ev.path).filter(Boolean) || [];
+      if (paths.length > 0) {
+        await supabase.storage.from('evidences').remove(paths);
+      }
+
+      const { error } = await supabase.from('internship_logs').delete().eq('id', log.id);
+      if (error) throw error;
+
+      fetchAllData();
+    } catch (err) {
+      alert('Gagal menghapus logbook: ' + err.message);
+    }
+  };
+
   const toggleLogStatus = async (log) => {
     const nextStatus = log.status === 'completed' ? 'in_progress' : 'completed';
     await supabase.from('internship_logs').update({ status: nextStatus }).eq('id', log.id);
@@ -302,6 +319,22 @@ export default function App() {
       alert('Gagal menyimpan bimbingan: ' + err.message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDeleteSupervision = async (item) => {
+    if (!confirm('Hapus riwayat bimbingan ini?')) return;
+    try {
+      if (item.proof_image_url) {
+        await supabase.storage.from('evidences').remove([item.proof_image_url]);
+      }
+
+      const { error } = await supabase.from('thesis_supervisions').delete().eq('id', item.id);
+      if (error) throw error;
+
+      fetchAllData();
+    } catch (err) {
+      alert('Gagal menghapus bimbingan: ' + err.message);
     }
   };
 
@@ -710,24 +743,34 @@ export default function App() {
                         </span>
                       </div>
 
-                      <button
-                        onClick={() => toggleLogStatus(log)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition ${
-                          log.status === 'completed'
-                            ? 'bg-[#ECFDF5] text-[#10B981]'
-                            : 'bg-[#FFFBEB] text-[#F59E0B]'
-                        }`}
-                      >
-                        {log.status === 'completed' ? (
-                          <>
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Completed
-                          </>
-                        ) : (
-                          <>
-                            <Clock className="w-3.5 h-3.5" /> In Progress
-                          </>
-                        )}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleLogStatus(log)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition ${
+                            log.status === 'completed'
+                              ? 'bg-[#ECFDF5] text-[#10B981]'
+                              : 'bg-[#FFFBEB] text-[#F59E0B]'
+                          }`}
+                        >
+                          {log.status === 'completed' ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Completed
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-3.5 h-3.5" /> In Progress
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => handleDeleteInternshipLog(log)}
+                          title="Hapus Logbook"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">
@@ -860,24 +903,34 @@ export default function App() {
                             )}
                           </div>
 
-                          <button
-                            onClick={() => toggleSupervisionStatus(item)}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition ${
-                              item.status === 'approved'
-                                ? 'bg-[#ECFDF5] text-[#10B981]'
-                                : 'bg-[#FFFBEB] text-[#F59E0B]'
-                            }`}
-                          >
-                            {item.status === 'approved' ? (
-                              <>
-                                <CheckCircle2 className="w-3.5 h-3.5" /> ACC / Selesai
-                              </>
-                            ) : (
-                              <>
-                                <Clock className="w-3.5 h-3.5" /> Revisi Berjalan
-                              </>
-                            )}
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => toggleSupervisionStatus(item)}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition ${
+                                item.status === 'approved'
+                                  ? 'bg-[#ECFDF5] text-[#10B981]'
+                                  : 'bg-[#FFFBEB] text-[#F59E0B]'
+                              }`}
+                            >
+                              {item.status === 'approved' ? (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5" /> ACC / Selesai
+                                </>
+                              ) : (
+                                <>
+                                  <Clock className="w-3.5 h-3.5" /> Revisi Berjalan
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              onClick={() => handleDeleteSupervision(item)}
+                              title="Hapus Riwayat Bimbingan"
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
                         <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">
