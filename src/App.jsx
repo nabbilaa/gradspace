@@ -47,11 +47,25 @@ export default function App() {
   const [selectedSupervisorFilter, setSelectedSupervisorFilter] = useState('all');
   const [previewFile, setPreviewFile] = useState(null);
 
+  // Modal & Editing States (Full CRUD)
   const [showTargetModal, setShowTargetModal] = useState(false);
   const [editingTarget, setEditingTarget] = useState(null);
+
   const [showLogModal, setShowLogModal] = useState(false);
+  const [editingLog, setEditingLog] = useState(null);
+  const [existingEvidences, setExistingEvidences] = useState([]);
+  const [removedEvidencePaths, setRemovedEvidencePaths] = useState([]);
+
   const [showBimbinganModal, setShowBimbinganModal] = useState(false);
+  const [editingSupervision, setEditingSupervision] = useState(null);
+  const [removeExistingProof, setRemoveExistingProof] = useState(false);
+
+  const [showMilestoneModal, setShowMilestoneModal] = useState(false);
+  const [editingMilestone, setEditingMilestone] = useState(null);
+
   const [showSupervisorModal, setShowSupervisorModal] = useState(false);
+  const [editingSupervisor, setEditingSupervisor] = useState(null);
+
   const [showWeeksModal, setShowWeeksModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -151,11 +165,21 @@ export default function App() {
     const target = new Date(dateStr);
     target.setHours(0, 0, 0, 0);
     const diff = Math.ceil((target - today) / (1000 * 60 * 60 * 24));
-    if (diff < 0) return { label: `Lewat ${Math.abs(diff)} Hari`, urgent: false, passed: true };
+    if (diff < 0) return { label: 'Selesai', urgent: false, passed: true };
     if (diff === 0) return { label: 'Hari Ini!', urgent: true, passed: false };
     return { label: `H-${diff} Hari`, urgent: diff <= 7, passed: false };
   };
 
+  const sortedTargets = useMemo(() => {
+    return [...targets].sort((a, b) => {
+      const aPassed = getCountdown(a.target_date).passed;
+      const bPassed = getCountdown(b.target_date).passed;
+      if (aPassed === bPassed) return 0;
+      return aPassed ? 1 : -1;
+    });
+  }, [targets]);
+
+  // ==================== AUTH ====================
   const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -169,32 +193,61 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
+  // ==================== CRUD: TARGETS ====================
   const handleSaveTarget = async (e) => {
     e.preventDefault();
     setSubmitting(true);
-    const formData = new FormData(e.target);
-    const payload = {
-      user_id: session.user.id,
-      title: formData.get('title'),
-      category: formData.get('category'),
-      target_date: formData.get('target_date'),
-    };
+    try {
+      const formData = new FormData(e.target);
+      const payload = {
+        user_id: session.user.id,
+        title: formData.get('title'),
+        category: formData.get('category'),
+        target_date: formData.get('target_date'),
+      };
 
-    if (editingTarget) {
-      await supabase.from('targets').update(payload).eq('id', editingTarget.id);
-    } else {
-      await supabase.from('targets').insert([payload]);
+      if (editingTarget) {
+        const { error } = await supabase.from('targets').update(payload).eq('id', editingTarget.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('targets').insert([payload]);
+        if (error) throw error;
+      }
+      setShowTargetModal(false);
+      setEditingTarget(null);
+      fetchAllData();
+    } catch (err) {
+      alert('Gagal menyimpan target: ' + err.message);
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
-    setShowTargetModal(false);
-    setEditingTarget(null);
-    fetchAllData();
   };
 
   const handleDeleteTarget = async (id) => {
     if (!confirm('Hapus target ini?')) return;
-    await supabase.from('targets').delete().eq('id', id);
-    fetchAllData();
+    const { error } = await supabase.from('targets').delete().eq('id', id);
+    if (error) alert('Gagal menghapus target: ' + error.message);
+    else fetchAllData();
+  };
+
+  // ==================== CRUD: INTERNSHIP LOGS ====================
+  const openCreateLogModal = () => {
+    setEditingLog(null);
+    setExistingEvidences([]);
+    setRemovedEvidencePaths([]);
+    setShowLogModal(true);
+  };
+
+  const openEditLogModal = (log) => {
+    setEditingLog(log);
+    setExistingEvidences(log.evidences || []);
+    setRemovedEvidencePaths([]);
+    setShowLogModal(true);
+  };
+
+  const handleRemoveExistingEvidence = (pathToRemove) => {
+    setExistingEvidences((prev) => prev.filter((ev) => ev.path !== pathToRemove));
+    setRemovedEvidencePaths((prev) => [...prev, pathToRemove]);
   };
 
   const handleSaveInternshipLog = async (e) => {
@@ -203,16 +256,22 @@ export default function App() {
     try {
       const formData = new FormData(e.target);
       const files = formData.getAll('evidences').filter((f) => f && f.size > 0);
-      const uploadedEvidences = [];
+      const newlyUploaded = [];
 
       for (const file of files) {
         const path = await uploadEvidenceFile(file, session.user.id, 'internship');
-        uploadedEvidences.push({
+        newlyUploaded.push({
           name: file.name,
           path,
           type: file.type,
         });
       }
+
+      if (removedEvidencePaths.length > 0) {
+        await supabase.storage.from('evidences').remove(removedEvidencePaths);
+      }
+
+      const finalEvidences = [...existingEvidences, ...newlyUploaded];
 
       const payload = {
         user_id: session.user.id,
@@ -222,15 +281,24 @@ export default function App() {
         summary: formData.get('summary'),
         blockers: formData.get('blockers') || null,
         status: formData.get('status'),
-        evidences: uploadedEvidences,
+        evidences: finalEvidences,
       };
 
-      const { error } = await supabase
-        .from('internship_logs')
-        .upsert(payload, { onConflict: 'user_id,week_number' });
+      if (editingLog) {
+        const { error } = await supabase
+          .from('internship_logs')
+          .update(payload)
+          .eq('id', editingLog.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('internship_logs')
+          .upsert(payload, { onConflict: 'user_id,week_number' });
+        if (error) throw error;
+      }
 
-      if (error) throw error;
       setShowLogModal(false);
+      setEditingLog(null);
       fetchAllData();
     } catch (err) {
       alert('Gagal menyimpan log: ' + err.message);
@@ -262,6 +330,7 @@ export default function App() {
     fetchAllData();
   };
 
+  // ==================== CRUD: THESIS MILESTONES ====================
   const toggleMilestone = async (milestone) => {
     await supabase
       .from('thesis_milestones')
@@ -270,20 +339,98 @@ export default function App() {
     fetchAllData();
   };
 
-  const handleAddSupervisor = async (e) => {
+  const handleSaveMilestone = async (e) => {
     e.preventDefault();
     setSubmitting(true);
-    const formData = new FormData(e.target);
-    await supabase.from('supervisors').insert([
-      {
+    try {
+      const formData = new FormData(e.target);
+      const payload = {
+        user_id: session.user.id,
+        title: formData.get('title'),
+        weight_percentage: Number(formData.get('weight_percentage')),
+        order_index: editingMilestone ? editingMilestone.order_index : milestones.length + 1,
+      };
+
+      if (editingMilestone) {
+        const { error } = await supabase
+          .from('thesis_milestones')
+          .update(payload)
+          .eq('id', editingMilestone.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('thesis_milestones')
+          .insert([{ ...payload, is_completed: false }]);
+        if (error) throw error;
+      }
+      setShowMilestoneModal(false);
+      setEditingMilestone(null);
+      fetchAllData();
+    } catch (err) {
+      alert('Gagal menyimpan tahapan skripsi: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteMilestone = async (id) => {
+    if (!confirm('Hapus tahapan skripsi ini?')) return;
+    const { error } = await supabase.from('thesis_milestones').delete().eq('id', id);
+    if (error) alert('Gagal menghapus tahapan: ' + error.message);
+    else fetchAllData();
+  };
+
+  // ==================== CRUD: SUPERVISORS ====================
+  const handleSaveSupervisor = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const formData = new FormData(e.target);
+      const payload = {
         user_id: session.user.id,
         name: formData.get('name'),
         role: formData.get('role'),
-      },
-    ]);
-    setSubmitting(false);
-    setShowSupervisorModal(false);
-    fetchAllData();
+      };
+
+      if (editingSupervisor) {
+        const { error } = await supabase
+          .from('supervisors')
+          .update(payload)
+          .eq('id', editingSupervisor.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('supervisors').insert([payload]);
+        if (error) throw error;
+      }
+
+      setEditingSupervisor(null);
+      e.target.reset();
+      fetchAllData();
+    } catch (err) {
+      alert('Gagal menyimpan data dosen: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDeleteSupervisor = async (id) => {
+    if (!confirm('Hapus dosen pembimbing ini?')) return;
+    const { error } = await supabase.from('supervisors').delete().eq('id', id);
+    if (error) alert('Gagal menghapus dosen: ' + error.message);
+    else fetchAllData();
+  };
+
+  // ==================== CRUD: THESIS SUPERVISIONS ====================
+  const openCreateSupervisionModal = () => {
+    setEditingSupervision(null);
+    setRemoveExistingProof(false);
+    setShowBimbinganModal(true);
+  };
+
+  const openEditSupervisionModal = (item) => {
+    setEditingSupervision(item);
+    setRemoveExistingProof(false);
+    setShowBimbinganModal(true);
   };
 
   const handleSaveSupervision = async (e) => {
@@ -292,8 +439,16 @@ export default function App() {
     try {
       const formData = new FormData(e.target);
       const proofFile = formData.get('proof_file');
-      let proofPath = null;
-      let proofName = null;
+      let proofPath = editingSupervision?.proof_image_url || null;
+      let proofName = editingSupervision?.proof_file_name || null;
+
+      if ((proofFile && proofFile.size > 0) || removeExistingProof) {
+        if (editingSupervision?.proof_image_url) {
+          await supabase.storage.from('evidences').remove([editingSupervision.proof_image_url]);
+        }
+        proofPath = null;
+        proofName = null;
+      }
 
       if (proofFile && proofFile.size > 0) {
         proofPath = await uploadEvidenceFile(proofFile, session.user.id, 'bimbingan');
@@ -310,10 +465,19 @@ export default function App() {
         proof_file_name: proofName,
       };
 
-      const { error } = await supabase.from('thesis_supervisions').insert([payload]);
-      if (error) throw error;
+      if (editingSupervision) {
+        const { error } = await supabase
+          .from('thesis_supervisions')
+          .update(payload)
+          .eq('id', editingSupervision.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('thesis_supervisions').insert([payload]);
+        if (error) throw error;
+      }
 
       setShowBimbinganModal(false);
+      setEditingSupervision(null);
       fetchAllData();
     } catch (err) {
       alert('Gagal menyimpan bimbingan: ' + err.message);
@@ -494,6 +658,7 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
+        {/* TARGETS */}
         <section>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -510,7 +675,7 @@ export default function App() {
             </button>
           </div>
 
-          {targets.length === 0 ? (
+          {sortedTargets.length === 0 ? (
             <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-6 text-center">
               <p className="text-sm text-slate-500">
                 Belum ada target tanggal (Seminar PKL, Sempro, atau Sidang).
@@ -524,26 +689,38 @@ export default function App() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {targets.map((target) => {
+              {sortedTargets.map((target) => {
                 const cd = getCountdown(target.target_date);
                 const isInternship = target.category === 'internship';
                 return (
                   <div
                     key={target.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col justify-between hover:border-slate-300 transition"
+                    className={`border rounded-2xl p-4 flex flex-col justify-between transition ${
+                      cd.passed
+                        ? 'bg-slate-50/80 border-slate-200/80 opacity-85'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
+                    }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <span
                           className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full mb-1.5 ${
-                            isInternship
+                            cd.passed
+                              ? 'bg-slate-200/70 text-slate-600'
+                              : isInternship
                               ? 'bg-[#EEF2FF] text-[#6366F1]'
                               : 'bg-[#ECFDF5] text-[#10B981]'
                           }`}
                         >
                           {isInternship ? 'Magang / PKL' : 'Skripsi / TA'}
                         </span>
-                        <h3 className="font-semibold text-slate-900 text-sm">{target.title}</h3>
+                        <h3
+                          className={`font-semibold text-sm ${
+                            cd.passed ? 'text-slate-500 line-through' : 'text-slate-900'
+                          }`}
+                        >
+                          {target.title}
+                        </h3>
                       </div>
 
                       <div className="flex items-center gap-1">
@@ -552,13 +729,15 @@ export default function App() {
                             setEditingTarget(target);
                             setShowTargetModal(true);
                           }}
-                          className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"
+                          title="Edit Target"
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleDeleteTarget(target.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
+                          title="Hapus Target"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -577,14 +756,15 @@ export default function App() {
                         </span>
                       </div>
                       <span
-                        className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
+                        className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg ${
                           cd.passed
-                            ? 'bg-slate-100 text-slate-500'
+                            ? 'bg-[#ECFDF5] text-[#10B981] border border-emerald-200'
                             : cd.urgent
                             ? 'bg-[#FFFBEB] text-[#F59E0B] border border-amber-200'
                             : 'bg-slate-50 text-slate-700'
                         }`}
                       >
+                        {cd.passed && <CheckCircle2 className="w-3.5 h-3.5" />}
                         {cd.label}
                       </span>
                     </div>
@@ -595,6 +775,7 @@ export default function App() {
           )}
         </section>
 
+        {/* PROGRESS CARDS */}
         <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-white border border-slate-200 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-2">
@@ -655,6 +836,7 @@ export default function App() {
           </div>
         </section>
 
+        {/* TABS & CONTENT */}
         <section className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="inline-flex p-1 bg-slate-200/70 rounded-xl">
@@ -682,7 +864,7 @@ export default function App() {
 
             {activeTab === 'internship' ? (
               <button
-                onClick={() => setShowLogModal(true)}
+                onClick={openCreateLogModal}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-[#6366F1] hover:bg-indigo-600 text-white text-xs font-medium rounded-xl transition"
               >
                 <Plus className="w-4 h-4" />
@@ -691,14 +873,17 @@ export default function App() {
             ) : (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setShowSupervisorModal(true)}
+                  onClick={() => {
+                    setEditingSupervisor(null);
+                    setShowSupervisorModal(true);
+                  }}
                   className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-xl transition"
                 >
                   <UserPlus className="w-3.5 h-3.5" />
-                  <span>Dosen</span>
+                  <span>Kelola Dosen</span>
                 </button>
                 <button
-                  onClick={() => setShowBimbinganModal(true)}
+                  onClick={openCreateSupervisionModal}
                   className="flex items-center gap-1.5 px-3.5 py-2 bg-[#10B981] hover:bg-emerald-600 text-white text-xs font-medium rounded-xl transition"
                 >
                   <Plus className="w-4 h-4" />
@@ -708,6 +893,7 @@ export default function App() {
             )}
           </div>
 
+          {/* INTERNSHIP LOGS LIST */}
           {activeTab === 'internship' && (
             <div className="space-y-3">
               {loadingData ? (
@@ -743,7 +929,7 @@ export default function App() {
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => toggleLogStatus(log)}
                           className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition ${
@@ -761,6 +947,14 @@ export default function App() {
                               <Clock className="w-3.5 h-3.5" /> In Progress
                             </>
                           )}
+                        </button>
+
+                        <button
+                          onClick={() => openEditLogModal(log)}
+                          title="Edit Logbook"
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                        >
+                          <Edit3 className="w-4 h-4" />
                         </button>
 
                         <button
@@ -813,21 +1007,36 @@ export default function App() {
             </div>
           )}
 
+          {/* THESIS MILESTONES & SUPERVISIONS */}
           {activeTab === 'thesis' && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               <div className="bg-white border border-slate-200 rounded-2xl p-5 h-fit space-y-3">
-                <h3 className="text-sm font-semibold text-slate-900">Checklist Tahapan Skripsi</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">Checklist Tahapan Skripsi</h3>
+                  <button
+                    onClick={() => {
+                      setEditingMilestone(null);
+                      setShowMilestoneModal(true);
+                    }}
+                    title="Tambah Tahapan"
+                    className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
                 <p className="text-xs text-slate-500">
-                  Centang tahapan yang selesai untuk memperbarui persentase otomatis.
+                  Centang tahapan selesai untuk menghitung progres otomatis.
                 </p>
                 <div className="divide-y divide-slate-100 pt-1">
                   {milestones.map((m) => (
-                    <button
+                    <div
                       key={m.id}
-                      onClick={() => toggleMilestone(m)}
-                      className="w-full py-2.5 flex items-start justify-between gap-2 text-left group"
+                      className="py-2.5 flex items-start justify-between gap-2 group"
                     >
-                      <div className="flex items-start gap-2.5">
+                      <button
+                        onClick={() => toggleMilestone(m)}
+                        className="flex items-start gap-2.5 text-left flex-1"
+                      >
                         {m.is_completed ? (
                           <CheckSquare className="w-4 h-4 text-[#10B981] shrink-0 mt-0.5" />
                         ) : (
@@ -840,11 +1049,31 @@ export default function App() {
                         >
                           {m.title}
                         </span>
+                      </button>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="text-[11px] font-semibold text-slate-400 mr-1">
+                          {m.weight_percentage}%
+                        </span>
+                        <button
+                          onClick={() => {
+                            setEditingMilestone(m);
+                            setShowMilestoneModal(true);
+                          }}
+                          title="Edit Tahapan"
+                          className="p-1 text-slate-400 hover:text-indigo-600 rounded"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMilestone(m.id)}
+                          title="Hapus Tahapan"
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       </div>
-                      <span className="text-[11px] font-semibold text-slate-400 shrink-0">
-                        {m.weight_percentage}%
-                      </span>
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -903,7 +1132,7 @@ export default function App() {
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5">
                             <button
                               onClick={() => toggleSupervisionStatus(item)}
                               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition ${
@@ -921,6 +1150,14 @@ export default function App() {
                                   <Clock className="w-3.5 h-3.5" /> Revisi Berjalan
                                 </>
                               )}
+                            </button>
+
+                            <button
+                              onClick={() => openEditSupervisionModal(item)}
+                              title="Edit Riwayat Bimbingan"
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                            >
+                              <Edit3 className="w-4 h-4" />
                             </button>
 
                             <button
@@ -965,6 +1202,7 @@ export default function App() {
         </section>
       </main>
 
+      {/* MOBILE BOTTOM NAV */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-6 py-2.5 flex items-center justify-around z-30">
         <button
           onClick={() => setActiveTab('internship')}
@@ -978,7 +1216,7 @@ export default function App() {
 
         <button
           onClick={() =>
-            activeTab === 'internship' ? setShowLogModal(true) : setShowBimbinganModal(true)
+            activeTab === 'internship' ? openCreateLogModal() : openCreateSupervisionModal()
           }
           className="w-11 h-11 -mt-6 rounded-2xl bg-[#6366F1] text-white flex items-center justify-center shadow-md"
         >
@@ -996,6 +1234,7 @@ export default function App() {
         </button>
       </nav>
 
+      {/* MODAL: TARGET */}
       {showTargetModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
@@ -1046,18 +1285,23 @@ export default function App() {
                 disabled={submitting}
                 className="w-full py-2.5 bg-[#6366F1] text-white text-sm font-medium rounded-xl"
               >
-                {submitting ? 'Menyimpan...' : 'Simpan Target'}
+                {submitting ? 'Menyimpan...' : editingTarget ? 'Perbarui Target' : 'Simpan Target'}
               </button>
             </form>
           </div>
         </div>
       )}
 
+      {/* MODAL: INTERNSHIP LOG (CREATE & EDIT) */}
       {showLogModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-slate-900">Catat Kegiatan Magang Mingguan</h3>
+              <h3 className="font-bold text-slate-900">
+                {editingLog
+                  ? `Edit Logbook Week ${editingLog.week_number}`
+                  : 'Catat Kegiatan Magang Mingguan'}
+              </h3>
               <button onClick={() => setShowLogModal(false)}>
                 <X className="w-5 h-5 text-slate-400" />
               </button>
@@ -1073,7 +1317,7 @@ export default function App() {
                     name="week_number"
                     min="1"
                     required
-                    defaultValue={internshipLogs.length + 1}
+                    defaultValue={editingLog ? editingLog.week_number : internshipLogs.length + 1}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1081,7 +1325,7 @@ export default function App() {
                   <label className="block text-xs font-medium text-slate-700 mb-1">Status</label>
                   <select
                     name="status"
-                    defaultValue="completed"
+                    defaultValue={editingLog?.status || 'completed'}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                   >
                     <option value="completed">Completed</option>
@@ -1098,6 +1342,7 @@ export default function App() {
                     type="date"
                     name="start_date"
                     required
+                    defaultValue={editingLog?.start_date}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1109,6 +1354,7 @@ export default function App() {
                     type="date"
                     name="end_date"
                     required
+                    defaultValue={editingLog?.end_date}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1121,6 +1367,7 @@ export default function App() {
                   name="summary"
                   rows="3"
                   required
+                  defaultValue={editingLog?.summary}
                   placeholder="Contoh: Membuat test case modul X, melakukan regression testing..."
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                 />
@@ -1131,13 +1378,40 @@ export default function App() {
                 </label>
                 <input
                   name="blockers"
+                  defaultValue={editingLog?.blockers || ''}
                   placeholder="Catatan kendala selama minggu ini"
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                 />
               </div>
+
+              {existingEvidences.length > 0 && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700">
+                    Lampiran Tersimpan
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {existingEvidences.map((ev, idx) => (
+                      <div
+                        key={idx}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-xs text-slate-700"
+                      >
+                        <span className="max-w-[160px] truncate">{ev.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveExistingEvidence(ev.path)}
+                          className="text-rose-500 hover:text-rose-700"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Unggah Bukti (Screenshot / PDF)
+                  {editingLog ? 'Tambah Bukti Baru (Opsional)' : 'Unggah Bukti (Screenshot / PDF)'}
                 </label>
                 <input
                   type="file"
@@ -1152,23 +1426,91 @@ export default function App() {
                 disabled={submitting}
                 className="w-full py-2.5 bg-[#6366F1] text-white text-sm font-medium rounded-xl"
               >
-                {submitting ? 'Mengunggah & Menyimpan...' : 'Simpan Logbook'}
+                {submitting
+                  ? 'Mengunggah & Menyimpan...'
+                  : editingLog
+                  ? 'Perbarui Logbook'
+                  : 'Simpan Logbook'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {showSupervisorModal && (
+      {/* MODAL: MILESTONES (CREATE & EDIT) */}
+      {showMilestoneModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-slate-900">Tambah Dosen Pembimbing</h3>
-              <button onClick={() => setShowSupervisorModal(false)}>
+              <h3 className="font-bold text-slate-900">
+                {editingMilestone ? 'Edit Tahapan Skripsi' : 'Tambah Tahapan Skripsi'}
+              </h3>
+              <button onClick={() => setShowMilestoneModal(false)}>
                 <X className="w-5 h-5 text-slate-400" />
               </button>
             </div>
-            <form onSubmit={handleAddSupervisor} className="space-y-4">
+            <form onSubmit={handleSaveMilestone} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Nama Tahapan
+                </label>
+                <input
+                  name="title"
+                  required
+                  defaultValue={editingMilestone?.title}
+                  placeholder="Contoh: BAB IV - Hasil dan Pembahasan"
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Bobot Persentase (%)
+                </label>
+                <input
+                  type="number"
+                  name="weight_percentage"
+                  min="1"
+                  max="100"
+                  required
+                  defaultValue={editingMilestone?.weight_percentage || 15}
+                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-2.5 bg-[#10B981] text-white text-sm font-medium rounded-xl"
+              >
+                {submitting ? 'Menyimpan...' : 'Simpan Tahapan'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SUPERVISORS (CREATE, LIST, EDIT, DELETE) */}
+      {showSupervisorModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900">
+                {editingSupervisor ? 'Edit Dosen Pembimbing' : 'Kelola Dosen Pembimbing'}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowSupervisorModal(false);
+                  setEditingSupervisor(null);
+                }}
+              >
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <form
+              key={editingSupervisor?.id || 'new'}
+              onSubmit={handleSaveSupervisor}
+              className="space-y-3"
+            >
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   Nama Lengkap & Gelar
@@ -1176,6 +1518,7 @@ export default function App() {
                 <input
                   name="name"
                   required
+                  defaultValue={editingSupervisor?.name}
                   placeholder="Contoh: Ahmad Fauzi, M.Kom."
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                 />
@@ -1184,6 +1527,7 @@ export default function App() {
                 <label className="block text-xs font-medium text-slate-700 mb-1">Peran</label>
                 <select
                   name="role"
+                  defaultValue={editingSupervisor?.role || 'Pembimbing 1'}
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                 >
                   <option value="Pembimbing 1">Pembimbing 1</option>
@@ -1191,23 +1535,76 @@ export default function App() {
                   <option value="Pembimbing PKL">Pembimbing PKL</option>
                 </select>
               </div>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="w-full py-2.5 bg-[#10B981] text-white text-sm font-medium rounded-xl"
-              >
-                {submitting ? 'Menyimpan...' : 'Simpan Dosen'}
-              </button>
+              <div className="flex gap-2">
+                {editingSupervisor && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingSupervisor(null)}
+                    className="px-4 py-2.5 bg-slate-100 text-slate-600 text-xs font-medium rounded-xl"
+                  >
+                    Batal Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 py-2.5 bg-[#10B981] text-white text-sm font-medium rounded-xl"
+                >
+                  {submitting
+                    ? 'Menyimpan...'
+                    : editingSupervisor
+                    ? 'Perbarui Dosen'
+                    : 'Tambah Dosen'}
+                </button>
+              </div>
             </form>
+
+            {supervisors.length > 0 && (
+              <div className="border-t border-slate-100 pt-4 space-y-2">
+                <p className="text-xs font-semibold text-slate-500">Daftar Dosen Tersimpan</p>
+                <div className="space-y-2 max-h-44 overflow-y-auto">
+                  {supervisors.map((sup) => (
+                    <div
+                      key={sup.id}
+                      className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 text-xs"
+                    >
+                      <div>
+                        <p className="font-semibold text-slate-800">{sup.name}</p>
+                        <p className="text-slate-500">{sup.role}</p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setEditingSupervisor(sup)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSupervisor(sup.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
+      {/* MODAL: BIMBINGAN (CREATE & EDIT) */}
       {showBimbinganModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-slate-900">Catat Riwayat Bimbingan</h3>
+              <h3 className="font-bold text-slate-900">
+                {editingSupervision ? 'Edit Riwayat Bimbingan' : 'Catat Riwayat Bimbingan'}
+              </h3>
               <button onClick={() => setShowBimbinganModal(false)}>
                 <X className="w-5 h-5 text-slate-400" />
               </button>
@@ -1220,6 +1617,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setShowBimbinganModal(false);
+                      setEditingSupervisor(null);
                       setShowSupervisorModal(true);
                     }}
                     className="text-[11px] text-emerald-600 font-medium hover:underline"
@@ -1230,6 +1628,7 @@ export default function App() {
                 <select
                   name="supervisor_id"
                   required
+                  defaultValue={editingSupervision?.supervisor_id || ''}
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                 >
                   <option value="">-- Pilih Dosen --</option>
@@ -1250,7 +1649,10 @@ export default function App() {
                     type="date"
                     name="supervision_date"
                     required
-                    defaultValue={new Date().toISOString().split('T')[0]}
+                    defaultValue={
+                      editingSupervision?.supervision_date ||
+                      new Date().toISOString().split('T')[0]
+                    }
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                   />
                 </div>
@@ -1258,7 +1660,7 @@ export default function App() {
                   <label className="block text-xs font-medium text-slate-700 mb-1">Status</label>
                   <select
                     name="status"
-                    defaultValue="pending_revision"
+                    defaultValue={editingSupervision?.status || 'pending_revision'}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                   >
                     <option value="pending_revision">Revisi Berjalan</option>
@@ -1275,14 +1677,32 @@ export default function App() {
                   name="notes"
                   rows="3"
                   required
+                  defaultValue={editingSupervision?.notes}
                   placeholder="Tuliskan poin revisi atau arahan dari dosen..."
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200"
                 />
               </div>
 
+              {editingSupervision?.proof_image_url && !removeExistingProof && (
+                <div className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-800">
+                  <span className="truncate">
+                    Bukti tersimpan: {editingSupervision.proof_file_name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setRemoveExistingProof(true)}
+                    className="text-rose-600 hover:underline ml-2 shrink-0"
+                  >
+                    Hapus Bukti
+                  </button>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Unggah Foto Lembar Kontrol Bimbingan / Bukti ACC
+                  {editingSupervision
+                    ? 'Ganti / Unggah Bukti Baru (Opsional)'
+                    : 'Unggah Foto Lembar Kontrol Bimbingan / Bukti ACC'}
                 </label>
                 <input
                   type="file"
@@ -1297,13 +1717,18 @@ export default function App() {
                 disabled={submitting}
                 className="w-full py-2.5 bg-[#10B981] text-white text-sm font-medium rounded-xl"
               >
-                {submitting ? 'Menyimpan...' : 'Simpan Bimbingan'}
+                {submitting
+                  ? 'Menyimpan...'
+                  : editingSupervision
+                  ? 'Perbarui Bimbingan'
+                  : 'Simpan Bimbingan'}
               </button>
             </form>
           </div>
         </div>
       )}
 
+      {/* MODAL: TOTAL WEEKS */}
       {showWeeksModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-xs w-full p-6 shadow-xl">
@@ -1338,6 +1763,7 @@ export default function App() {
         </div>
       )}
 
+      {/* MODAL: PREVIEW FILE */}
       {previewFile && (
         <div
           onClick={() => setPreviewFile(null)}
